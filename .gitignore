@@ -1,0 +1,8 @@
+# -*- mode: gitignore; -*-
+*.ld
+
+.vscode/
+asm/
+assets/
+cdrom.img/
+ghidra/

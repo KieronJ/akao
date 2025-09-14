@@ -1,0 +1,48 @@
+name: SCUS_941.63
+sha1: a95e8b16b97071203b953bb81a33980509262f30
+options:
+  basename: SCUS_941.63
+  target_path: cdrom.img/SCUS_941.63
+  base_path: ..
+  compiler: PSYQ
+  find_file_boundaries: True
+  platform: psx
+  mips_abi_gpr: o32
+  mips_abi_float_regs: o32
+  create_undefined_funcs_auto: True
+  undefined_funcs_auto_path: config/undefined_funcs_auto.txt
+  create_undefined_syms_auto: True
+  undefined_syms_auto_path: config/undefined_syms_auto.txt
+  symbol_addrs_path: [config/symbol_addrs.txt, config/lib_symbol_addrs.txt]
+  asm_path: asm
+  src_path: src
+  build_path: build
+  extensions_path: tools/splat_ext
+  section_order: [".text", ".data", ".rodata", ".bss"]
+  auto_link_sections: [".rodata", ".data", ".bss"]
+  subalign: 16
+  disasm_unknown: True
+  hasm_in_src_path: True
+segments:
+  - name: header
+    type: header
+    start: 0x0
+
+  - name: main
+    type: code
+    start: 0x800
+    vram:  0x80010000
+    bss_size: 0x3d088
+    subalign: 8
+    align: 4
+    subsegments:
+      - [0x800, rdata]         # .rdata
+      - [0x18b8, c, main]      # .text
+      - [0x19bd0, c, akao]     # .text
+      - [0x24290, c, cdlib]    # .text
+      - [0x26a98, c, psyq]     # .text
+      - [0x394fc, data]        # .data
+      - [0x53544, data, sdata] # .sdata
+      - { start: 0x5360c, type: bss, vram: 0x80062e0c }
+
+  - [0x61000] # end of file
