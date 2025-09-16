@@ -41,6 +41,20 @@ void AkaoTransferFlush(void)
 
 /* sndmain.c */
 
+typedef struct _AKAO_INSTRUMENT {
+    /* 0x00 */ u_int      addr;
+    /* 0x04 */ u_int      loop_addr;
+    /* 0x08 */ u_char     ar;
+    /* 0x09 */ u_char     dr;
+    /* 0x0A */ u_char     sl;
+    /* 0x0B */ u_char     sr;
+    /* 0x0C */ u_char     rr;
+    /* 0x0D */ u_char     a_mode;
+    /* 0x0E */ u_char     s_mode;
+    /* 0x0F */ u_char     r_mode;
+    /* 0x10 */ u_int      pitch[12];
+} AKAO_INSTRUMENT;
+
 typedef struct _AKAO_VOICE {
     /* 0x00 */ u_int      voice;
     /* 0x04 */ u_int      update_flags;
@@ -67,9 +81,12 @@ typedef struct _AKAO_TRACK {
     /* 0x28 */ u_int      alternate_voice;
     /* 0x2C */ char       pad2[0xC];
     /* 0x38 */ u_int      effect_flags;
-    /* 0x3C */ char       pad3[0x18];
+    /* 0x3C */ char       pad3[0x16];
+    /* 0x52 */ u_short    field_52;
     /* 0x54 */ u_short    field_54;
-    /* 0x56 */ char       pad4[0x18];
+    /* 0x56 */ u_short    delta_time_counter;
+    /* 0x58 */ u_short    instrument;
+    /* 0x5A */ char       pad4[0x14];
     /* 0x6E */ u_short    legato_flags;
     /* 0x70 */ char       pad5[0x34];
     /* 0xA4 */ u_short    noise_delay;
@@ -77,7 +94,13 @@ typedef struct _AKAO_TRACK {
     /* 0x70 */ char       pad6[0x10];
     /* 0xB8 */ u_short    loop_depth;
     /* 0xBA */ u_short    loop_delay[4];
-    /* 0xC4 */ char       pad7[0x1A];
+    /* 0xC2 */ u_short    previous_delta_time;
+    /* 0xC4 */ u_short    forced_delta_time;
+    /* 0xC6 */ u_short    overlay_balance;
+    /* 0xC8 */ short      overlay_balance_slope;
+    /* 0xCA */ short      pan_slope;
+    /* 0xCC */ short      transpose;
+    /* 0xCE */ char       pad7[0xE];
     /* 0xDC */ AKAO_VOICE attr;
 } AKAO_TRACK;
 
@@ -97,9 +120,10 @@ typedef struct _AKAO_PLAYER {
     /* 0x30 */ u_int      reverb_mask;
     /* 0x34 */ u_int      pitch_lfo_mask;
     /* 0x38 */ u_int      spucnt;
-    /* 0x3C */ char       pad2[0xE];
+    /* 0x3C */ char       pad1[0xE];
     /* 0x4A */ u_short    song_id;
-    /* 0x4C */ char       pad3[0x8];
+    /* 0x4C */ char       pad2[0x6];
+    /* 0x52 */ u_short    noise_clock;
     /* 0x54 */ u_short    field_54;
     /* 0x56 */ u_short    beats_per_measure;
     /* 0x58 */ u_short    beat;
@@ -108,8 +132,14 @@ typedef struct _AKAO_PLAYER {
     /* 0x5E */ u_short    measure;
 } AKAO_PLAYER;
 
+AKAO_INSTRUMENT AkaoInstruments[128];
+
 extern AKAO_PLAYER AkaoPlayer;
-extern AKAO_TRACK  AkaoTracks[24];
+extern u_int       AkaoSpuControl; /* same as AkaoPlayer.spucnt */
+
+extern AKAO_TRACK AkaoTracks[24];
+
+extern u_short AkaoNoiseClock;
 
 extern int D_80062F04;
 
@@ -450,7 +480,10 @@ INCLUDE_ASM("asm/nonmatchings/akao", func_80032274);
 
 INCLUDE_ASM("asm/nonmatchings/akao", func_800323CC);
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_800324D8);
+void AkaoCmdSetTranspose(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
+{
+    track->transpose = (signed char)*track->addr++;
+}
 
 INCLUDE_ASM("asm/nonmatchings/akao", func_80032500);
 
@@ -500,45 +533,212 @@ INCLUDE_ASM("asm/nonmatchings/akao", func_80032C8C);
 
 INCLUDE_ASM("asm/nonmatchings/akao", func_80032CE8);
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_80032D44);
+void AkaoCmdSetLegatoOn(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
+{
+    track->legato_flags = 1;
+}
 
-void func_80032D50(void)
+void AkaoCmdSetLegatoOff(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 {
     /* do nothing */
 }
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_80032D58);
+void AkaoCmdSetFullNoteOn(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
+{
+    track->legato_flags = 4;
+}
 
-void func_80032D64(void)
+void AkaoCmdSetFullNoteOff(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 {
     /* do nothing */
 }
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_80032D6C);
+void AkaoCmdSetNoiseClock(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
+{
+    int clock;
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_80032E08);
+    clock = *track->addr++;
+    if (track->field_54 == 0)
+    {
+        if (clock & 0xC0)
+        {
+            player->noise_clock += clock & 0x3F;
+            player->noise_clock &= 0x3F;
+        }
+        else
+        {
+            player->noise_clock = clock;
+        }
+    }
+    else
+    {
+        if (clock & 0xC0)
+        {
+            AkaoNoiseClock += clock & 0x3F;
+            AkaoNoiseClock &= 0x3F;
+        }
+        else
+        {
+            AkaoNoiseClock = clock;
+        }
+    }
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_80032E6C);
+    /* TODO: AkaoPlayer.spucnt, doesn't match when using struct */
+    AkaoSpuControl |= 0x10;
+}
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_80032ED0);
+void AkaoCmdSetAttackRate(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
+{
+    track->attr.ar = *track->addr++;
+    track->attr.update_flags |= 0x900;
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_80032F34);
+    if (track->effect_flags & 0x100)
+    {
+        AkaoTracks[track->overlay_voice].attr.ar = track->attr.ar;
+    }
+}
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_80032F98);
+void AkaoCmdSetDecayRate(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
+{
+    track->attr.dr = *track->addr++;
+    track->attr.update_flags |= 0x1000;
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_80032FFC);
+    if (track->effect_flags & 0x100)
+    {
+        AkaoTracks[track->overlay_voice].attr.dr = track->attr.dr;
+    }
+}
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_80033060);
+void AkaoCmdSetSustainLevel(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
+{
+    track->attr.sl = *track->addr++;
+    track->attr.update_flags |= 0x8000;
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_800330C4);
+    if (track->effect_flags & 0x100)
+    {
+        AkaoTracks[track->overlay_voice].attr.sl = track->attr.sl;
+    }
+}
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_80033128);
+void AkaoCmdSetSustainRate(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
+{
+    track->attr.sr = *track->addr++;
+    track->attr.update_flags |= 0x2200;
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_800331CC);
+    if (track->effect_flags & 0x100)
+    {
+        AkaoTracks[track->overlay_voice].attr.sr = track->attr.sr;
+    }
+}
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_80033224);
+void AkaoCmdSetReleaseRate(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
+{
+    track->attr.rr = *track->addr++;
+    track->attr.update_flags |= 0x4400;
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_80033264);
+    if (track->effect_flags & 0x100)
+    {
+        AkaoTracks[track->overlay_voice].attr.rr = track->attr.rr;
+    }
+}
+
+void AkaoCmdSetAttackMode(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
+{
+    track->attr.a_mode = *track->addr++;
+    track->attr.update_flags |= 0x100;
+
+    if (track->effect_flags & 0x100)
+    {
+        AkaoTracks[track->overlay_voice].attr.a_mode = track->attr.a_mode;
+    }
+}
+
+void AkaoCmdSetSustainMode(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
+{
+    track->attr.s_mode = *track->addr++;
+    track->attr.update_flags |= 0x200;
+
+    if (track->effect_flags & 0x100)
+    {
+        AkaoTracks[track->overlay_voice].attr.s_mode = track->attr.s_mode;
+    }
+}
+
+void AkaoCmdSetReleaseMode(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
+{
+    track->attr.r_mode = *track->addr++;
+    track->attr.update_flags |= 0x400;
+
+    if (track->effect_flags & 0x100)
+    {
+        AkaoTracks[track->overlay_voice].attr.r_mode = track->attr.r_mode;
+    }
+}
+
+void AkaoCmdSetAlternateVoiceOn(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
+{
+    u_int used;
+    int   i;
+    int   bit;
+
+    track->attr.rr = *track->addr++;
+    if (track->effect_flags & 0x200)
+    {
+        return;
+    }
+
+    used = player->voice_mask | player->overlay_mask | player->alternate_mask;
+    for (i = 0, bit = 1; bit & 0xFFFFFF; i++, bit <<= 1)
+    {
+        if (!(used & bit))
+        {
+            break;
+        }
+    }
+
+    if (bit & 0xFFFFFF)
+    {
+        player->alternate_mask |= bit;
+        track->alternate_voice = i & 0xFFFF;
+        track->effect_flags |= 0x200;
+    }
+}
+
+void AkaoCmdSetAlternateVoiceOff(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
+{
+    player->alternate_mask &= ~(1 << track->alternate_voice);
+    track->effect_flags &= ~0x200;
+
+    track->attr.rr = AkaoInstruments[track->instrument].rr;
+    track->attr.update_flags |= 0x4400;
+}
+
+void AkaoCmdLoopStart(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
+{
+    track->loop_depth = (track->loop_depth + 1) & 0x3;
+    track->loop_addr[track->loop_depth] = track->addr;
+    track->loop_delay[track->loop_depth] = 0;
+}
+
+void AkaoCmdLoopEndCount(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
+{
+    int count;
+
+    count = *track->addr++;
+    if (count == 0)
+    {
+        count = 256;
+    }
+
+    if (++track->loop_delay[track->loop_depth] != count)
+    {
+        track->addr = track->loop_addr[track->loop_depth];
+    }
+    else
+    {
+        track->loop_depth = (track->loop_depth - 1) & 0x3;
+    }
+}
 
 void AkaoCmdJumpCount(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 {
@@ -588,7 +788,7 @@ void AkaoCmdLoopBreak(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
     }
 }
 
-void AkaoCmdLoop(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
+void AkaoCmdLoopEnd(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 {
     track->loop_delay[track->loop_depth]++;
     track->addr = track->loop_addr[track->loop_depth];
@@ -788,7 +988,7 @@ void AkaoCmdJumpCond(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
     }
 }
 
-/* NOT MATCHING! */
+/* TODO: NOT MATCHING! */
 void AkaoFinishChannel(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 {
     u_int voice;
