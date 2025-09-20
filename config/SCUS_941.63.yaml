@@ -37,10 +37,11 @@ segments:
     align: 4
     subsegments:
       - [0x800, rdata]         # .rdata
-      - [0x18b8, c, main]      # .text
+      - [0x18b8, asm, libsn]   # .text
+      - [0x197c, c, main]      # .text
       - [0x19bd0, c, akao]     # .text
-      - [0x24290, c, cdlib]    # .text
-      - [0x26a98, c, psyq]     # .text
+      - [0x24290, c, unknown]  # .text
+      - [0x24370, asm, psyq]   # .text
       - [0x394fc, data]        # .data
       - [0x53544, data, sdata] # .sdata
       - { start: 0x5360c, type: bss, vram: 0x80062e0c }
