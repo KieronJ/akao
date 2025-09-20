@@ -57,7 +57,7 @@ typedef struct _AKAO_INSTRUMENT {
 
 typedef struct _AKAO_VOICE {
     /* 0x00 */ u_int      voice;
-    /* 0x04 */ u_int      update_flags;
+    /* 0x04 */ u_int      mask;
     /* 0x08 */ u_int      addr;
     /* 0x0C */ u_int      loop_addr;
     /* 0x10 */ u_int      a_mode;
@@ -186,27 +186,36 @@ typedef struct _AKAO_PLAYER {
 
 static AKAO_INSTRUMENT AkaoInstruments[128];
 static AKAO_PLAYER AkaoPlayer;
-static u_int       AkaoSpuControl; /* same as AkaoPlayer.spucnt */
 static AKAO_TRACK AkaoTracks[24];
+
+extern SpuCommonAttr AkaoCommonAttr;
+
+extern u_int AkaoCdVolume;
+
+extern u_char AkaoCmdLengths[256];
 
 static u_short AkaoNoiseClock;
 
 static int D_80062F04;
 
 static u_int D_80099FCC;
+static u_int D_80099FD0;
+static u_int D_80099FD4;
 static u_int D_80099FEC;
 static u_int D_80099FF0;
 static u_int D_80099FF4;
 
 void *AkaoVibratoForms[16];
 
-#define AKAO_EFFECT_VIBRATO 0x01
-#define AKAO_EFFECT_TREMOLO 0x02
-#define AKAO_EFFECT_PAN_LFO 0x04
-#define AKAO_EFFECT_DRUM    0x08
-#define AKAO_EFFECT_FREQMOD 0x10
-#define AKAO_EFFECT_VOLMOD  0x20
-#define AKAO_EFFECT_ALL     (AKAO_EFFECT_VIBRATO | AKAO_EFFECT_TREMOLO | AKAO_EFFECT_PAN_LFO | AKAO_EFFECT_DRUM | AKAO_EFFECT_FREQMOD | AKAO_EFFECT_VOLMOD)
+#define AKAO_EFFECT_VIBRATO   0x1
+#define AKAO_EFFECT_TREMOLO   0x2
+#define AKAO_EFFECT_PAN_LFO   0x4
+#define AKAO_EFFECT_DRUM      0x8
+#define AKAO_EFFECT_FREQMOD   0x10
+#define AKAO_EFFECT_VOLMOD    0x20
+#define AKAO_EFFECT_OVERLAY   0x100
+#define AKAO_EFFECT_ALTERNATE 0x200
+#define AKAO_EFFECT_ALL       (AKAO_EFFECT_VIBRATO | AKAO_EFFECT_TREMOLO | AKAO_EFFECT_PAN_LFO | AKAO_EFFECT_DRUM | AKAO_EFFECT_FREQMOD | AKAO_EFFECT_VOLMOD)
 
 INCLUDE_ASM("asm/nonmatchings/akao", func_800294BC);
 
@@ -455,9 +464,101 @@ INCLUDE_ASM("asm/nonmatchings/akao", func_8002DF88);
 
 INCLUDE_ASM("asm/nonmatchings/akao", func_8002E1A8);
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_8002E23C);
+void AkaoWriteVoice(u_int voice, AKAO_VOICE *attr)
+{
+    if (attr->mask & 0x10)
+    {
+        SpuSetVoicePitch(voice, attr->pitch);
+        attr->mask &= ~0x10;
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_8002E428);
+        if (attr->mask == 0)
+        {
+            return;
+        }
+    }
+
+    if (attr->mask & 0x3)
+    {
+        SpuSetVoiceVolume(voice, attr->volume.left, attr->volume.right);
+        attr->mask &= ~0x3;
+
+        if (attr->mask == 0)
+        {
+            return;
+        }
+    }
+
+    if (attr->mask & 0x80)
+    {
+        SpuSetVoiceStartAddr(voice, attr->addr);
+        attr->mask &= ~0x80;
+
+        if (attr->mask == 0)
+        {
+            return;
+        }
+    }
+
+    if (attr->mask & 0x10000)
+    {
+        SpuSetVoiceLoopStartAddr(voice, attr->loop_addr);
+        attr->mask &= ~0x10000;
+
+        if (attr->mask == 0)
+        {
+            return;
+        }
+    }
+
+    if (attr->mask & 0x2200)
+    {
+        SpuSetVoiceSRAttr(voice, attr->sr, attr->s_mode);
+        attr->mask &= ~0x2200;
+
+        if (attr->mask == 0)
+        {
+            return;
+        }
+    }
+
+    if (attr->mask & 0x900)
+    {
+        SpuSetVoiceARAttr(voice, attr->ar, attr->a_mode);
+        attr->mask &= ~0x900;
+
+        if (attr->mask == 0)
+        {
+            return;
+        }
+    }
+
+    if (attr->mask & 0x4400)
+    {
+        SpuSetVoiceRRAttr(voice, attr->rr, attr->r_mode);
+        attr->mask &= ~0x4400;
+
+        if (attr->mask == 0)
+        {
+            return;
+        }
+    }
+
+    if (attr->mask & 0x9000)
+    {
+        SpuSetVoiceDR(voice, attr->dr);
+        SpuSetVoiceSL(voice, attr->sl);
+        attr->mask &= ~0x9000;
+    }
+}
+
+void AkaoWriteCdVolume(void)
+{
+    AkaoCommonAttr.mask = SPU_COMMON_CDVOLL | SPU_COMMON_CDVOLR | SPU_COMMON_CDREV;
+    AkaoCommonAttr.cd.reverb = 0;
+    AkaoCommonAttr.cd.volume.right = AkaoCdVolume >> 16;
+    AkaoCommonAttr.cd.volume.left = AkaoCdVolume >> 16;
+    SpuSetCommonAttr(&AkaoCommonAttr);
+}
 
 INCLUDE_ASM("asm/nonmatchings/akao", func_8002E478);
 
@@ -467,11 +568,76 @@ INCLUDE_ASM("asm/nonmatchings/akao", func_8002ED34);
 
 INCLUDE_ASM("asm/nonmatchings/akao", func_8002F24C);
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_8002F738);
+void func_8002F738(AKAO_TRACK *track, u_int mask, u_int voice)
+{
+    AKAO_TRACK *overlay;
+    u_short     bal;
+    int         l, r;
+
+    overlay = &AkaoTracks[track->overlay_voice];
+    bal = 127 - (track->overlay_balance >> 8);
+
+    l = track->attr.volume.left;
+    track->attr.volume.left = (l * bal) >> 8;
+    overlay->attr.volume.left = (l * track->overlay_balance) >> 16;
+
+    r = track->attr.volume.right;
+    track->attr.volume.right = (r * bal) >> 8;
+    overlay->attr.volume.right = (r * track->overlay_balance) >> 16;
+
+    overlay->attr.pitch = track->attr.pitch;
+    overlay->attr.mask |= track->attr.mask;
+
+    AkaoWriteVoice(track->attr.voice, &track->attr);
+
+    if (mask & (1 << voice))
+    {
+        AkaoWriteVoice(voice, &overlay->attr);
+    }
+}
 
 INCLUDE_ASM("asm/nonmatchings/akao", func_8002F848);
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_8002FDA0);
+void AkaoBuildMask(AKAO_TRACK *tracks, u_int *mask, u_int on, u_int allowed)
+{
+    int     index;
+    u_short voice;
+
+    *mask |= on;
+
+    index = 1;
+    while (on != 0)
+    {
+        if (on & index)
+        {
+            if (tracks->effect_flags & AKAO_EFFECT_OVERLAY)
+            {
+                voice = tracks->overlay_voice;
+                if (tracks->overlay_voice >= 24)
+                {
+                    voice -= 24;
+                }
+
+                if (allowed & (1 << voice))
+                {
+                    *mask |= 1 << voice;
+                }
+            }
+            else if (tracks->effect_flags & AKAO_EFFECT_ALTERNATE)
+            {
+                if (allowed & (1 << tracks->alternate_voice))
+                {
+                    *mask |= 1 << tracks->alternate_voice;
+                }
+            }
+
+            on ^= index;
+        }
+
+        index <<= 1;
+        tracks++;
+    }
+}
 
 INCLUDE_ASM("asm/nonmatchings/akao", func_8002FE48);
 
@@ -484,7 +650,68 @@ void _AkaoReverbVoice(void);
 INCLUDE_ASM("asm/nonmatchings/akao", func_80030148);
 void _AkaoPitchLFOVoice(void);
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_80030234);
+extern u_int D_80049538;
+extern u_int D_8004953C;
+extern u_int D_80049540;
+extern u_int D_80049544;
+extern u_int D_80062E04;
+extern u_short D_80062F78;
+extern u_int D_80062FF8;
+
+void AkaoMain(void);
+
+int AkaoTimerCallback(void)
+{
+    int     ticks;
+    u_int   time;
+    u_short count;
+    int     total;
+    int     last;
+
+    ticks = GetRCnt(RCntCNT2);
+    time = VSync(1);
+
+    if (time < D_80062F78)
+    {
+        D_80062F78 = 0;
+    }
+
+    count = (time - D_80062F78) / 66;
+    if (count == 0 || count > 8)
+    {
+        count = 1;
+    }
+
+    D_80062F78 = time;
+    time = count;
+
+    if (D_80062FF8 & 0x4)
+    {
+        count <<= 1;
+    }
+
+    for (; count > 0; count--)
+    {
+        AkaoMain();
+    }
+
+    ticks = GetRCnt(RCntCNT2) - ticks;
+    if (ticks <= 0)
+    {
+        ticks += 17361;
+    }
+
+    total = D_8004953C + D_80049540 + D_80049544 + ticks;
+    last = D_80049544;
+
+    D_80049544 = ticks;
+    D_80049538 = D_8004953C;
+    D_8004953C = D_80049540;
+    D_80049540 = last;
+    D_80062E04 = total;
+
+    return time;
+}
 
 INCLUDE_ASM("asm/nonmatchings/akao", func_80030380);
 
@@ -492,12 +719,51 @@ INCLUDE_ASM("asm/nonmatchings/akao", func_800308D4);
 
 INCLUDE_ASM("asm/nonmatchings/akao", func_80030E7C);
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_80031820);
-void AkaoSetTrackInstrument(AKAO_TRACK *track, u_short num);
+void AkaoSetTrackInstrument(AKAO_TRACK *track, u_short num)
+{
+    AKAO_INSTRUMENT *instr;
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_800318BC);
+    instr = &AkaoInstruments[num];
+    track->instrument = num;
+    track->attr.addr = instr->addr;
+    track->attr.loop_addr = instr->loop_addr;
+    track->attr.a_mode = instr->a_mode;
+    track->attr.s_mode = instr->s_mode;
+    track->attr.r_mode = instr->r_mode;
+    track->attr.ar = instr->ar;
+    track->attr.dr = instr->dr;
+    track->attr.sl = instr->sl;
+    track->attr.sr = instr->sr;
+    track->attr.rr = instr->rr;
+    track->attr.mask |= 0x1FF80;
+}
 
-INCLUDE_ASM("asm/nonmatchings/akao", func_80031A70);
+INCLUDE_ASM("asm/nonmatchings/akao", func_800318BC); // jump table
+
+int AkaoGetTrackEnd(AKAO_TRACK *track)
+{
+    u_char *addr;
+    int loop;
+    int code;
+    int len;
+
+    addr = track->addr;
+    loop = 0xCA;
+
+    do
+    {
+        code = *addr;
+        len = AkaoCmdLengths[code];
+        addr += len;
+    } while (len != 0);
+
+    if (code != loop)
+    {
+        return 0xA0;
+    }
+
+    return 0xCA;
+}
 
 /* command.c */
 
@@ -567,14 +833,14 @@ void AkaoCmdSetReverbSlide(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 void AkaoCmdSetMasterVolume(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 {
     track->master_volume = *track->addr++;
-    track->attr.update_flags |= 0x3;
+    track->attr.mask |= 0x3;
 }
 
 void AkaoCmdSetVolume(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 {
     track->volume = (signed char)*track->addr++ << 23;
     track->volume_slide_length_counter = 0;
-    track->attr.update_flags |= 0x3;
+    track->attr.mask |= 0x3;
 }
 
 void AkaoCmdSetVolumeSlide(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
@@ -604,7 +870,7 @@ void AkaoCmdSetOverlayVoiceOn(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask
     int     index;
     int     inst1, inst2;
 
-    if (!(track->effect_flags & 0x100))
+    if (!(track->effect_flags & AKAO_EFFECT_OVERLAY))
     {
         used = player->voice_mask | player->overlay_mask | player->alternate_mask;
         voice = D_80062F04 ? 24 : 0;
@@ -644,7 +910,7 @@ void AkaoCmdSetOverlayVoiceOn(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask
     {
         player->overlay_mask |= index;
         track->overlay_voice = voice;
-        track->effect_flags |= 0x100;
+        track->effect_flags |= AKAO_EFFECT_OVERLAY;
 
         inst1 = *track->addr++;
         inst2 = *track->addr++;
@@ -664,9 +930,9 @@ void AkaoCmdSetOverlayVoiceOff(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mas
         voice -= 24;
     }
 
-    if (track->effect_flags & 0x100)
+    if (track->effect_flags & AKAO_EFFECT_OVERLAY)
     {
-        track->effect_flags &= ~0x100;
+        track->effect_flags &= ~AKAO_EFFECT_OVERLAY;
         player->overlay_mask &= ~(1 << voice);
     }
 }
@@ -676,9 +942,9 @@ void AkaoCmdSetOverlayBalance(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask
     track->overlay_balance = *track->addr++ << 8;
     track->overlay_balance_slide_length_counter = 0;
 
-    if (track->effect_flags & 0x100)
+    if (track->effect_flags & AKAO_EFFECT_OVERLAY)
     {
-        track->attr.update_flags |= 0x3;
+        track->attr.mask |= 0x3;
     }
 }
 
@@ -706,7 +972,7 @@ void AkaoCmdSetPan(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 {
     track->pan = *track->addr++ << 8;
     track->pan_slide_length = 0;
-    track->attr.update_flags |= 0x3;
+    track->attr.mask |= 0x3;
 }
 
 void AkaoCmdSetPanSlide(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
@@ -755,19 +1021,19 @@ void AkaoCmdLoadInstrument(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
         voice -= 24;
     }
 
-    if (track->effect_flags & 0x100)
+    if (track->effect_flags & AKAO_EFFECT_OVERLAY)
     {
         player->overlay_mask &= ~(1 << voice);
-        track->effect_flags &= ~0x100;
+        track->effect_flags &= ~AKAO_EFFECT_OVERLAY;
     }
 
     if ((track->field_54 != 0) || !(mask & player->active & D_80099FCC))
     {
-        track->attr.update_flags |= 0x10;
+        track->attr.mask |= 0x10;
         track->pitch_of_note = (track->pitch_of_note * AkaoInstruments[next].pitch[0]) / AkaoInstruments[track->instrument].pitch[0];
     }
 
-    if (track->effect_flags & 0x200)
+    if (track->effect_flags & AKAO_EFFECT_ALTERNATE)
     {
         instr = &AkaoInstruments[next];
 
@@ -780,7 +1046,7 @@ void AkaoCmdLoadInstrument(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
         track->attr.sr = instr->sr;
         track->attr.a_mode = instr->a_mode;
         track->attr.s_mode = instr->s_mode;
-        track->attr.update_flags |= 0x1BB80;
+        track->attr.mask |= 0x1BB80;
     }
     else
     {
@@ -798,7 +1064,7 @@ void AkaoCmdLoadInstrumentSoft(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mas
 
     if ((track->field_54 != 0) || !(mask & player->active & D_80099FCC))
     {
-        track->attr.update_flags |= 0x10;
+        track->attr.mask |= 0x10;
         track->pitch_of_note = (track->pitch_of_note * instr->pitch[0]) / AkaoInstruments[track->instrument].pitch[0];
     }
 
@@ -812,15 +1078,15 @@ void AkaoCmdLoadInstrumentSoft(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mas
     track->attr.a_mode = instr->a_mode;
     track->attr.s_mode = instr->s_mode;
 
-    if (track->effect_flags & 0x200)
+    if (track->effect_flags & AKAO_EFFECT_ALTERNATE)
     {
-        track->attr.update_flags |= 0x1BB80;
+        track->attr.mask |= 0x1BB80;
     }
     else
     {
         track->attr.rr = instr->rr;
         track->attr.r_mode = instr->r_mode;
-        track->attr.update_flags |= 0x1FF80;
+        track->attr.mask |= 0x1FF80;
     }
 }
 
@@ -838,9 +1104,9 @@ void AkaoCmdResetADSR(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
     track->attr.a_mode = instr->a_mode;
     track->attr.s_mode = instr->s_mode;
     track->attr.r_mode = instr->r_mode;
-    track->attr.update_flags |= 0xFF00;
+    track->attr.mask |= 0xFF00;
 
-    if (track->effect_flags & 0x100)
+    if (track->effect_flags & AKAO_EFFECT_OVERLAY)
     {
         overlay = &AkaoTracks[track->overlay_voice];
         overlay->attr.ar = track->attr.ar;
@@ -1005,7 +1271,7 @@ void AkaoCmdSetVibratoOff(AKAO_TRACK* track, AKAO_PLAYER* player, u_int mask)
     track->effect_flags &= ~AKAO_EFFECT_VIBRATO;
 
     track->vibrato_lfo_amplitude = 0;
-    track->attr.update_flags |= 0x10;
+    track->attr.mask |= 0x10;
 }
 
 void AkaoCmdSetTremoloOn(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
@@ -1068,7 +1334,7 @@ void AkaoCmdSetTremoloOff(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
     track->effect_flags &= ~AKAO_EFFECT_TREMOLO;
 
     track->tremolo_lfo_amplitude = 0;
-    track->attr.update_flags |= 0x3;
+    track->attr.mask |= 0x3;
 }
 
 void AkaoCmdSetPanLFOOn(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
@@ -1114,7 +1380,7 @@ void AkaoCmdSetPanLFOOff(AKAO_TRACK* track, AKAO_PLAYER* player, u_int mask)
     track->effect_flags &= ~AKAO_EFFECT_PAN_LFO;
 
     track->pan_lfo_amplitude = 0;
-    track->attr.update_flags |= 0x3;
+    track->attr.mask |= 0x3;
 }
 
 void AkaoCmdSetNoiseOn(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
@@ -1128,8 +1394,7 @@ void AkaoCmdSetNoiseOn(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
         D_80099FEC |= mask;
     }
 
-    AkaoSpuControl |= 0x10;
-
+    SET_SPUCNT();
     _AkaoNoiseVoice();
 }
 
@@ -1144,9 +1409,9 @@ void AkaoCmdSetNoiseOff(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
         D_80099FEC &= ~mask;
     }
 
-    AkaoSpuControl |= 0x10;
-
+    SET_SPUCNT();
     _AkaoNoiseVoice();
+
     track->noise_delay = 0;
 }
 
@@ -1257,16 +1522,15 @@ void AkaoCmdSetNoiseClock(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
         }
     }
 
-    /* TODO: AkaoPlayer.spucnt, doesn't match when using struct */
-    AkaoSpuControl |= 0x10;
+    SET_SPUCNT();
 }
 
 void AkaoCmdSetAttackRate(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 {
     track->attr.ar = *track->addr++;
-    track->attr.update_flags |= 0x900;
+    track->attr.mask |= 0x900;
 
-    if (track->effect_flags & 0x100)
+    if (track->effect_flags & AKAO_EFFECT_OVERLAY)
     {
         AkaoTracks[track->overlay_voice].attr.ar = track->attr.ar;
     }
@@ -1275,9 +1539,9 @@ void AkaoCmdSetAttackRate(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 void AkaoCmdSetDecayRate(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 {
     track->attr.dr = *track->addr++;
-    track->attr.update_flags |= 0x1000;
+    track->attr.mask |= 0x1000;
 
-    if (track->effect_flags & 0x100)
+    if (track->effect_flags & AKAO_EFFECT_OVERLAY)
     {
         AkaoTracks[track->overlay_voice].attr.dr = track->attr.dr;
     }
@@ -1286,9 +1550,9 @@ void AkaoCmdSetDecayRate(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 void AkaoCmdSetSustainLevel(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 {
     track->attr.sl = *track->addr++;
-    track->attr.update_flags |= 0x8000;
+    track->attr.mask |= 0x8000;
 
-    if (track->effect_flags & 0x100)
+    if (track->effect_flags & AKAO_EFFECT_OVERLAY)
     {
         AkaoTracks[track->overlay_voice].attr.sl = track->attr.sl;
     }
@@ -1297,9 +1561,9 @@ void AkaoCmdSetSustainLevel(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 void AkaoCmdSetSustainRate(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 {
     track->attr.sr = *track->addr++;
-    track->attr.update_flags |= 0x2200;
+    track->attr.mask |= 0x2200;
 
-    if (track->effect_flags & 0x100)
+    if (track->effect_flags & AKAO_EFFECT_OVERLAY)
     {
         AkaoTracks[track->overlay_voice].attr.sr = track->attr.sr;
     }
@@ -1308,9 +1572,9 @@ void AkaoCmdSetSustainRate(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 void AkaoCmdSetReleaseRate(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 {
     track->attr.rr = *track->addr++;
-    track->attr.update_flags |= 0x4400;
+    track->attr.mask |= 0x4400;
 
-    if (track->effect_flags & 0x100)
+    if (track->effect_flags & AKAO_EFFECT_OVERLAY)
     {
         AkaoTracks[track->overlay_voice].attr.rr = track->attr.rr;
     }
@@ -1319,9 +1583,9 @@ void AkaoCmdSetReleaseRate(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 void AkaoCmdSetAttackMode(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 {
     track->attr.a_mode = *track->addr++;
-    track->attr.update_flags |= 0x100;
+    track->attr.mask |= 0x100;
 
-    if (track->effect_flags & 0x100)
+    if (track->effect_flags & AKAO_EFFECT_OVERLAY)
     {
         AkaoTracks[track->overlay_voice].attr.a_mode = track->attr.a_mode;
     }
@@ -1330,9 +1594,9 @@ void AkaoCmdSetAttackMode(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 void AkaoCmdSetSustainMode(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 {
     track->attr.s_mode = *track->addr++;
-    track->attr.update_flags |= 0x200;
+    track->attr.mask |= 0x200;
 
-    if (track->effect_flags & 0x100)
+    if (track->effect_flags & AKAO_EFFECT_OVERLAY)
     {
         AkaoTracks[track->overlay_voice].attr.s_mode = track->attr.s_mode;
     }
@@ -1341,9 +1605,9 @@ void AkaoCmdSetSustainMode(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 void AkaoCmdSetReleaseMode(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 {
     track->attr.r_mode = *track->addr++;
-    track->attr.update_flags |= 0x400;
+    track->attr.mask |= 0x400;
 
-    if (track->effect_flags & 0x100)
+    if (track->effect_flags & AKAO_EFFECT_OVERLAY)
     {
         AkaoTracks[track->overlay_voice].attr.r_mode = track->attr.r_mode;
     }
@@ -1356,7 +1620,7 @@ void AkaoCmdSetAlternateVoiceOn(AKAO_TRACK *track, AKAO_PLAYER *player, u_int ma
     int   bit;
 
     track->attr.rr = *track->addr++;
-    if (track->effect_flags & 0x200)
+    if (track->effect_flags & AKAO_EFFECT_ALTERNATE)
     {
         return;
     }
@@ -1374,17 +1638,17 @@ void AkaoCmdSetAlternateVoiceOn(AKAO_TRACK *track, AKAO_PLAYER *player, u_int ma
     {
         player->alternate_mask |= bit;
         track->alternate_voice = i & 0xFFFF;
-        track->effect_flags |= 0x200;
+        track->effect_flags |= AKAO_EFFECT_ALTERNATE;
     }
 }
 
 void AkaoCmdSetAlternateVoiceOff(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
 {
     player->alternate_mask &= ~(1 << track->alternate_voice);
-    track->effect_flags &= ~0x200;
+    track->effect_flags &= ~AKAO_EFFECT_ALTERNATE;
 
     track->attr.rr = AkaoInstruments[track->instrument].rr;
-    track->attr.update_flags |= 0x4400;
+    track->attr.mask |= 0x4400;
 }
 
 void AkaoCmdLoopStart(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
@@ -1680,7 +1944,7 @@ void AkaoCmdFinishChannel(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
         player->reverb_mask    = (mask ^ 0xFFFFFF) & player->reverb_mask;
         player->pitch_lfo_mask = (mask ^ 0xFFFFFF) & player->pitch_lfo_mask;
 
-        if (track->effect_flags & 0x100)
+        if (track->effect_flags & AKAO_EFFECT_OVERLAY)
         {
             voice = track->overlay_voice;
             if (D_80062F04 != 0)
@@ -1691,7 +1955,7 @@ void AkaoCmdFinishChannel(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
             player->overlay_mask = ~(1 << voice) & player->overlay_mask;
         }
 
-        if (track->effect_flags & 0x200)
+        if (track->effect_flags & AKAO_EFFECT_ALTERNATE)
         {
             player->alternate_mask = ~(1 << track->alternate_voice) & player->alternate_mask;
         }
@@ -1707,7 +1971,7 @@ void AkaoCmdFinishChannel(AKAO_TRACK *track, AKAO_PLAYER *player, u_int mask)
         AkaoPlayer.active  = ~mask & AkaoPlayer.active;
         AkaoPlayer.keyoffs = ~mask & AkaoPlayer.keyoffs;
 
-        AkaoTracks[track->alternate_voice].attr.update_flags |= 0x1FF80;
+        AkaoTracks[track->alternate_voice].attr.mask |= 0x1FF80;
     }
 
     track->effect_flags = 0;
